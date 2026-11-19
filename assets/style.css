@@ -341,3 +341,29 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* Dashboard metric grids */
+.kpi-grid,
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+}
+
+/* Metric cards */
+.metric-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 24px;
+    min-height: 150px;
+}
+
+/* Responsive layout */
+@media (max-width: 900px) {
+    .kpi-grid,
+    .metrics-grid {
+        grid-template-columns: 1fr;
+    }
+}
