@@ -10,17 +10,22 @@ from src.pages.project_a import create_project_a_page
 from src.pages.project_b import create_project_b_page
 from src.pages.well_correlation import create_well_correlation_page
 from src.pages.data_explorer import create_data_explorer_page
+
 from src.callbacks.overview_callbacks import update_data_explorer
 from src.callbacks.correlation_callbacks import register_correlation_callbacks
 
-
 from src.pages.project_a import register_project_a_callbacks
+
 
 app = Dash(
     __name__,
     title="WellScope | Reservoir Analytics",
     suppress_callback_exceptions=True
 )
+
+# Expose Flask server for deployment with Gunicorn
+server = app.server
+
 
 @app.callback(
     Output("data-explorer-heatmap", "figure"),
@@ -79,8 +84,10 @@ def display_page(pathname):
         ]
     )
 
+
 register_project_a_callbacks(app)
 register_correlation_callbacks(app)
+
 
 if __name__ == "__main__":
     app.run(debug=True)
