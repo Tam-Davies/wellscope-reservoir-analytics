@@ -272,6 +272,49 @@ def create_project_a_page():
                     dcc.Graph(id="project-a-electrofacies-figure", config={"displayModeBar": True, "responsive": True}),
                 ],
             ),
+
+            # -------------------------
+            # Electrofacies Characterization
+            # -------------------------
+            html.H2("Electrofacies Characterization"),
+            html.P("Compare the selected input-log distributions within each electrofacies cluster."),
+            html.Div(className="panel", children=[
+                dcc.Graph(id="project-a-electrofacies-characterization", config={"displayModeBar": True, "responsive": True}),
+            ]),
+
+            # -------------------------
+            # Cross-Well Electrofacies Comparison
+            # -------------------------
+            html.H2("Cross-Well Electrofacies Comparison"),
+            html.P("Fit one shared clustering model across selected wells for comparable facies labels."),
+            html.Div(className="panel", children=[
+                html.Label("Select Wells to Compare"),
+                dcc.Dropdown(
+                    id="project-a-crosswell-wells",
+                    options=[{"label": well, "value": well} for well in wells],
+                    value=wells[:min(3, len(wells))],
+                    multi=True,
+                    placeholder="Select multiple wells",
+                ),
+                html.Br(),
+                html.Label("Clustering Input Logs"),
+                dcc.Dropdown(
+                    id="project-a-crosswell-logs",
+                    options=[{"label": log, "value": log} for log in available_logs],
+                    value=[log for log in ["GR", "RHOB", "NPHI"] if log in available_logs],
+                    multi=True,
+                    placeholder="Select at least two logs",
+                ),
+                html.Br(),
+                html.Label("Number of Facies"),
+                dcc.Slider(id="project-a-crosswell-clusters", min=2, max=8, step=1, value=4,
+                           marks={i: str(i) for i in range(2, 9)}),
+                dcc.Graph(id="project-a-crosswell-depth-figure", config={"displayModeBar": True, "responsive": True}),
+                dcc.Graph(id="project-a-crosswell-distribution-figure", config={"displayModeBar": True, "responsive": True}),
+                html.Button("Export Cross-Well Facies Dataset (CSV)", id="project-a-crosswell-export", n_clicks=0,
+                           style={"marginTop": "12px"}),
+                dcc.Download(id="project-a-crosswell-download"),
+            ]),
         ]
     )
 
@@ -770,6 +813,175 @@ def create_electrofacies_figure(well, selected_logs=None, n_clusters=4, top_dept
 
 
 # =========================================================
+# ELECTROFACIES CHARACTERIZATION
+# =========================================================
+
+def create_electrofacies_characterization_figure(well, selected_logs=None, n_clusters=4,
+                                               top_depth=None, bottom_depth=None):
+    """Show per-cluster distributions for each selected input log."""
+    results = prepare_electrofacies_data(well, selected_logs, n_clusters, top_depth, bottom_depth)
+    selected_logs = [log for log in (selected_logs or []) if log in results.columns]
+    if results.empty or not selected_logs:
+        fig = go.Figure()
+        fig.update_layout(template="plotly_white", title="Insufficient data for electrofacies characterization")
+        fig.add_annotation(text="Select a well and at least two valid input logs.",
+                         x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
+        return fig
+
+    fig = make_subplots(rows=1, cols=len(selected_logs), subplot_titles=selected_logs,
+                        horizontal_spacing=min(0.12, 0.5 / max(len(selected_logs), 1)))
+    palette = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#f59e0b", "#0891b2", "#db2777", "#64748b"]
+    for col, log in enumerate(selected_logs, start=1):
+        for facies in sorted(results["ELECTROFACIES"].unique()):
+            vals = results.loc[results["ELECTROFACIES"] == facies, log].dropna()
+            if vals.empty:
+                continue
+            fig.add_trace(go.Box(
+                y=vals, name=f"Facies {facies}", legendgroup=f"facies-{facies}",
+                marker_color=palette[(int(facies)-1) % len(palette)],
+                boxpoints=False, showlegend=bool(col == 1),
+                hovertemplate=f"{log}: %{{y}}<extra>Facies {facies}</extra>"
+            ), row=1, col=col)
+        fig.update_yaxes(title_text=log, row=1, col=col)
+    fig.update_layout(title=f"Electrofacies Log Distribution — {well}", template="plotly_white",
+                    height=550, boxmode="group", legend=dict(orientation="h"),
+                    margin=dict(l=55, r=25, t=80, b=60))
+    return fig
+
+
+
+# =========================================================
+# CROSS-WELL ELECTROFACIES COMPARISON
+# =========================================================
+
+def prepare_crosswell_electrofacies(selected_wells, selected_logs, n_clusters=4,
+                                    top_depth=None, bottom_depth=None):
+    """Build a shared, coverage-aware KMeans dataset for selected wells."""
+    selected_wells = [well for well in (selected_wells or []) if well in wells_data]
+    if len(selected_wells) < 2:
+        return pd.DataFrame()
+
+    requested_logs = list(selected_logs or [])
+    # Keep only logs present in every well, then exclude logs with insufficient
+    # non-null coverage in any selected well to avoid an empty complete-case set.
+    common_logs = set(wells_data[selected_wells[0]].columns)
+    for well in selected_wells[1:]:
+        common_logs.intersection_update(wells_data[well].columns)
+    candidate_logs = [log for log in requested_logs if log in common_logs]
+    if len(candidate_logs) < 2:
+        return pd.DataFrame()
+
+    per_well_frames = []
+    coverage_by_log = {log: [] for log in candidate_logs}
+    for well in selected_wells:
+        df = wells_data[well].copy()
+        depth = df["DEPTH"]
+        if top_depth is not None and bottom_depth is not None:
+            lo, hi = sorted([top_depth, bottom_depth])
+            df = df.loc[(depth >= lo) & (depth <= hi)].copy()
+        elif top_depth is not None:
+            df = df.loc[depth >= top_depth].copy()
+        elif bottom_depth is not None:
+            df = df.loc[depth <= bottom_depth].copy()
+        for log in candidate_logs:
+            coverage_by_log[log].append(float(df[log].notna().mean()) if len(df) else 0.0)
+        df["WELL"] = well
+        per_well_frames.append(df)
+
+    # A log must be populated for at least 20% of interval samples in every well.
+    usable_logs = [log for log in candidate_logs if min(coverage_by_log[log]) >= 0.20]
+    if len(usable_logs) < 2:
+        return pd.DataFrame()
+
+    frames = []
+    for df in per_well_frames:
+        usable = df.dropna(subset=usable_logs).copy()
+        if not usable.empty:
+            frames.append(usable[["DEPTH", "WELL"] + usable_logs])
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    if len(combined) < int(n_clusters) or combined["WELL"].nunique() < 2:
+        return pd.DataFrame()
+    if combined[usable_logs].nunique().min() < 2:
+        return pd.DataFrame()
+
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(combined[usable_logs])
+    model = KMeans(n_clusters=int(n_clusters), random_state=42, n_init=10)
+    combined["ELECTROFACIES"] = model.fit_predict(scaled) + 1
+    combined["CLUSTER_INPUT_LOGS"] = ", ".join(usable_logs)
+    combined["ELECTROFACIES_COUNT"] = int(n_clusters)
+    return combined.sort_values(["WELL", "DEPTH"]).reset_index(drop=True)
+
+
+
+def create_crosswell_depth_figure(results, n_clusters=4):
+    if results.empty:
+        fig = go.Figure()
+        fig.update_layout(template="plotly_white", title="Insufficient shared log data for cross-well clustering")
+        fig.add_annotation(text="Choose at least two wells and two logs with sufficient coverage in both wells.",
+                         x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
+        return fig
+    palette = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#f59e0b", "#0891b2", "#db2777", "#64748b"]
+    wells = results["WELL"].unique().tolist()
+    fig = make_subplots(rows=1, cols=len(wells), shared_yaxes=True,
+                        subplot_titles=wells, horizontal_spacing=0.04)
+    for col, well in enumerate(wells, start=1):
+        df = results[results["WELL"] == well].sort_values("DEPTH")
+        depth = df["DEPTH"].to_numpy(dtype=float)
+        labels = df["ELECTROFACIES"].to_numpy(dtype=int)
+        if len(depth) < 2:
+            continue
+        steps = np.diff(depth)
+        valid_steps = steps[steps > 0]
+        typical_step = float(np.median(valid_steps)) if len(valid_steps) else 1.0
+        mids = (depth[:-1] + depth[1:]) / 2
+        tops = np.r_[depth[0] - typical_step/2, mids]
+        bottoms = np.r_[mids, depth[-1] + typical_step/2]
+        for facies in sorted(np.unique(labels)):
+            facies_indices = np.where(labels == facies)[0]
+            for idx in facies_indices:
+                if bottoms[idx] - tops[idx] > 2.5 * typical_step:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[0.15, 0.85], y=[tops[idx], bottoms[idx]], mode="lines",
+                    line=dict(color=palette[(int(facies)-1) % len(palette)], width=24),
+                    name=f"Facies {facies}", legendgroup=f"facies{facies}",
+                    showlegend=bool(col == 1 and idx == facies_indices[0]), hoverinfo="skip"),
+                    row=1, col=col)
+    fig.update_yaxes(title_text="Depth (ft)", autorange="reversed", row=1, col=1)
+    for col in range(2, len(wells)+1):
+        fig.update_yaxes(matches="y", row=1, col=col)
+    fig.update_xaxes(range=[0, 1], tickvals=[0.5], ticktext=["Facies"], showgrid=False)
+    fig.update_layout(template="plotly_white", height=850, title="Shared-Model Cross-Well Electrofacies Logs",
+                     margin=dict(l=70, r=25, t=80, b=50), legend=dict(orientation="h"))
+    return fig
+
+
+def create_crosswell_distribution_figure(results):
+    if results.empty:
+        fig = go.Figure()
+        fig.update_layout(template="plotly_white", title="Insufficient shared log data for facies distribution")
+        fig.add_annotation(text="Facies proportions will appear once valid shared clustering data is available.",
+                         x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
+        return fig
+    counts = results.groupby(["WELL", "ELECTROFACIES"]).size().rename("Count").reset_index()
+    counts["Percent"] = counts.groupby("WELL")["Count"].transform(lambda x: x / x.sum() * 100)
+    fig = go.Figure()
+    palette = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#f59e0b", "#0891b2", "#db2777", "#64748b"]
+    for facies in sorted(counts["ELECTROFACIES"].unique()):
+        sub = counts[counts["ELECTROFACIES"] == facies]
+        fig.add_trace(go.Bar(x=sub["WELL"], y=sub["Percent"], name=f"Facies {facies}",
+                            marker_color=palette[(int(facies)-1) % len(palette)]))
+    fig.update_layout(template="plotly_white", barmode="stack", title="Electrofacies Proportion by Well",
+                     yaxis_title="Samples (%)", yaxis=dict(range=[0, 100]), xaxis_title="Well",
+                     height=500, legend=dict(orientation="h"))
+    return fig
+
+
+# =========================================================
 # CALLBACK REGISTRATION
 # =========================================================
 
@@ -807,6 +1019,52 @@ def register_project_a_callbacks(app):
         return dcc.send_data_frame(export_df.to_csv, f"{safe_well}_vsh_ml_dataset.csv", index=False)
 
 
+
+    @app.callback(
+        Output("project-a-electrofacies-characterization", "figure"),
+        Input("project-a-well-select", "value"),
+        Input("project-a-electrofacies-logs", "value"),
+        Input("project-a-electrofacies-clusters", "value"),
+        Input("project-a-top-depth", "value"),
+        Input("project-a-bottom-depth", "value"),
+    )
+    def update_electrofacies_characterization(well, selected_logs, n_clusters, top_depth, bottom_depth):
+        return create_electrofacies_characterization_figure(
+            well, selected_logs, n_clusters, top_depth, bottom_depth
+        )
+
+
+
+    @app.callback(
+        Output("project-a-crosswell-depth-figure", "figure"),
+        Output("project-a-crosswell-distribution-figure", "figure"),
+        Input("project-a-crosswell-wells", "value"),
+        Input("project-a-crosswell-logs", "value"),
+        Input("project-a-crosswell-clusters", "value"),
+        Input("project-a-top-depth", "value"),
+        Input("project-a-bottom-depth", "value"),
+    )
+    def update_crosswell_comparison(selected_wells, selected_logs, n_clusters, top_depth, bottom_depth):
+        results = prepare_crosswell_electrofacies(selected_wells, selected_logs, n_clusters, top_depth, bottom_depth)
+        return create_crosswell_depth_figure(results, n_clusters), create_crosswell_distribution_figure(results)
+
+    @app.callback(
+        Output("project-a-crosswell-download", "data"),
+        Input("project-a-crosswell-export", "n_clicks"),
+        State("project-a-crosswell-wells", "value"),
+        State("project-a-crosswell-logs", "value"),
+        State("project-a-crosswell-clusters", "value"),
+        State("project-a-top-depth", "value"),
+        State("project-a-bottom-depth", "value"),
+        prevent_initial_call=True,
+    )
+    def export_crosswell_dataset(n_clicks, selected_wells, selected_logs, n_clusters, top_depth, bottom_depth):
+        if not n_clicks:
+            return None
+        export_df = prepare_crosswell_electrofacies(selected_wells, selected_logs, n_clusters, top_depth, bottom_depth)
+        if export_df.empty:
+            return None
+        return dcc.send_data_frame(export_df.to_csv, "crosswell_electrofacies_dataset.csv", index=False)
 
     @app.callback(
         Output("project-a-electrofacies-figure", "figure"),
