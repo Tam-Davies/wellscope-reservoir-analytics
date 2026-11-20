@@ -1,7 +1,7 @@
 from pathlib import Path
 import lasio
 import pandas as pd
-import numpy as np 
+import numpy as np
 
 DATA_DIR = Path("data/project_a/raw")
 
@@ -9,26 +9,25 @@ DATA_DIR = Path("data/project_a/raw")
 def load_las_file(file_path):
     """Load a LAS file and standardize its depth column."""
     las = lasio.read(file_path)
-
-    # LAS depth index becomes our standard DEPTH column
     df = las.df().reset_index()
 
-    # Standardize the depth column name
     df.rename(columns={df.columns[0]: "DEPTH"}, inplace=True)
 
-    # Remove redundant depth curves
     duplicate_depth_columns = [
-        col for col in df.columns
-        if col.startswith("DEPT:")
+        col for col in df.columns if col.startswith("DEPT:")
     ]
 
-    df.drop(columns=duplicate_depth_columns, inplace=True, errors="ignore")
+    df.drop(
+        columns=duplicate_depth_columns,
+        inplace=True,
+        errors="ignore"
+    )
 
     return df
 
 
 def load_all_wells():
-    """Load all LAS files from the Project A raw-data directory."""
+    """Load all LAS files from the Project A raw data directory."""
     wells = {}
 
     for file_path in DATA_DIR.glob("*.las"):
@@ -43,30 +42,26 @@ def load_all_wells():
 
     return wells
 
-def process_well_data(df):
-    """Clean and standardize well log data without imputing missing values."""
 
+def process_well_data(df):
+    """Clean and standardize well log data."""
     processed = df.copy()
 
-    # Replace infinite values with NaN
     processed.replace([np.inf, -np.inf], np.nan, inplace=True)
-
-    # Remove invalid depth values
     processed.dropna(subset=["DEPTH"], inplace=True)
-
-    # Sort by depth
     processed.sort_values("DEPTH", inplace=True)
-
-    # Remove duplicate depth samples
-    processed.drop_duplicates(subset=["DEPTH"], keep="first", inplace=True)
-
-    # Reset row index
+    processed.drop_duplicates(
+        subset=["DEPTH"],
+        keep="first",
+        inplace=True
+    )
     processed.reset_index(drop=True, inplace=True)
 
     return processed
 
+
 def process_all_wells(save=True):
-    """Process all wells and optionally save processed CSV files."""
+    """Process all raw wells and optionally save processed CSV files."""
     wells = load_all_wells()
     processed_wells = {}
 
@@ -84,8 +79,9 @@ def process_all_wells(save=True):
 
     return processed_wells
 
+
 def load_processed_wells():
-    """Load saved processed well data from CSV files."""
+    """Load processed well data from CSV files."""
     processed_dir = Path("data/project_a/processed")
     wells = {}
 
@@ -95,8 +91,9 @@ def load_processed_wells():
 
     return wells
 
+
 def get_well_summary():
-    """Generate a summary of the saved processed wells."""
+    """Generate a summary of processed well data."""
     wells = load_processed_wells()
     summaries = []
 

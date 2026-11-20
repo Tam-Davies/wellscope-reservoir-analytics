@@ -1,3 +1,4 @@
+import pandas as pd
 from dash import html, dcc
 import plotly.graph_objects as go
 
@@ -11,36 +12,32 @@ def create_data_explorer_page():
     wells = sorted(wells_data.keys())
     curves = ["GR", "RHOB", "NPHI", "ILD", "DT"]
 
-    # Calculate curve coverage
     coverage = []
 
-    for well in wells:
-        df = wells_data[well]
-        row = []
+    for well, df in wells_data.items():
+        row = {"Well": well}
 
         for curve in curves:
             if curve in df.columns:
-                percent = round(df[curve].notna().mean() * 100, 1)
+                row[curve] = round(df[curve].notna().mean() * 100, 1)
             else:
-                percent = 0.0
-
-            row.append(percent)
+                row[curve] = 0.0
 
         coverage.append(row)
 
-    gr_coverage = round(
-        sum(row[curves.index("GR")] for row in coverage) / len(wells),
-        1
-    )
+    coverage_df = pd.DataFrame(coverage)
 
     total_samples = sum(len(df) for df in wells_data.values())
 
-    # Initial heatmap
+    avg_gr_coverage = round(
+        coverage_df["GR"].mean(), 1
+    )
+
     fig = go.Figure(
         data=go.Heatmap(
-            z=coverage,
+            z=coverage_df[curves].values,
             x=curves,
-            y=wells,
+            y=coverage_df["Well"],
             colorscale=[
                 [0.0, "#fee2e2"],
                 [0.5, "#fef3c7"],
@@ -48,7 +45,10 @@ def create_data_explorer_page():
             ],
             zmin=0,
             zmax=100,
-            text=[[f"{v}%" for v in row] for row in coverage],
+            text=[
+                [f"{value}%" for value in row]
+                for row in coverage_df[curves].values
+            ],
             texttemplate="%{text}",
             colorbar=dict(title="Coverage (%)"),
         )
@@ -62,162 +62,160 @@ def create_data_explorer_page():
         height=450,
     )
 
-    # Initial table
-    table_rows = []
-
-    for i, well in enumerate(wells):
-        table_rows.append(
-            html.Tr([
-                html.Td(well),
-                *[
-                    html.Td(f"{value}%")
-                    for value in coverage[i]
-                ]
-            ])
-        )
-
-    # Quality notes
-    quality_notes = []
-
-    for well in wells:
-        df = wells_data[well]
-        missing_curves = []
-
-        for curve in curves:
-            if curve not in df.columns:
-                missing_curves.append(f"{curve} (not available)")
-
-            elif df[curve].isna().mean() > 0.5:
-                missing_curves.append(
-                    f"{curve} ({df[curve].isna().mean() * 100:.1f}% missing)"
+    initial_table = html.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Well"),
+                        *[html.Th(curve) for curve in curves],
+                    ]
                 )
+            ),
+            html.Tbody(
+                [
+                    html.Tr(
+                        [
+                            html.Td(row["Well"]),
+                            *[
+                                html.Td(f"{row[curve]}%")
+                                for curve in curves
+                            ],
+                        ]
+                    )
+                    for _, row in coverage_df.iterrows()
+                ]
+            ),
+        ],
+        className="data-table",
+    )
 
-        if missing_curves:
-            quality_notes.append(
-                html.P(f"{well}: " + ", ".join(missing_curves))
-            )
-
-    return html.Div([
-
-        # Header
-        html.Div([
+    return html.Div(
+        [
             html.H1("Data Explorer"),
             html.P(
-                "Explore well datasets, log availability, "
-                "and data quality."
-            ),
-        ], className="page-header"),
-
-        # Summary cards
-        html.Div([
-
-            html.Div([
-                html.P("Wells"),
-                html.H2(str(len(wells))),
-                html.Small("Available in study"),
-            ], className="metric-card"),
-
-            html.Div([
-                html.P("Log Curves"),
-                html.H2(str(len(curves))),
-                html.Small("Curve types reviewed"),
-            ], className="metric-card"),
-
-            html.Div([
-                html.P("GR Coverage"),
-                html.H2(f"{gr_coverage}%"),
-                html.Small("Average across wells"),
-            ], className="metric-card"),
-
-            html.Div([
-                html.P("Total Samples"),
-                html.H2(f"{total_samples:,}"),
-                html.Small("Processed log records"),
-            ], className="metric-card"),
-
-        ], className="metrics-grid"),
-
-        # Filters
-        html.Div([
-
-            html.Div([
-                html.Label("Select Wells"),
-                dcc.Dropdown(
-                    id="well-filter",
-                    options=[
-                        {"label": well, "value": well}
-                        for well in wells
-                    ],
-                    value=wells,
-                    multi=True,
-                    placeholder="Select wells",
-                ),
-            ], className="filter-item"),
-
-            html.Div([
-                html.Label("Select Curves"),
-                dcc.Dropdown(
-                    id="curve-filter",
-                    options=[
-                        {"label": curve, "value": curve}
-                        for curve in curves
-                    ],
-                    value=curves,
-                    multi=True,
-                    placeholder="Select curves",
-                ),
-            ], className="filter-item"),
-
-        ], className="filters-container"),
-
-        # Heatmap — callback target
-        html.Div([
-            dcc.Graph(
-                id="data-explorer-heatmap",
-                figure=fig,
-                config={"displayModeBar": True},
-            ),
-        ], className="panel"),
-
-        # Table — callback target
-        html.Div([
-
-            html.H3(
-                "Curve Coverage Table",
-                className="section-title"
+                "Explore well log data quality, curve coverage, "
+                "and data availability across wells."
             ),
 
+            # KPI Cards
             html.Div(
-                html.Table([
-                    html.Thead(
-                        html.Tr([
-                            html.Th("Well"),
-                            *[html.Th(curve) for curve in curves]
-                        ])
+                className="kpi-grid",
+                children=[
+                    html.Div(
+                        className="kpi-card",
+                        children=[
+                            html.H4("Total Wells"),
+                            html.H2(len(wells)),
+                        ],
                     ),
-                    html.Tbody(table_rows),
-                ], className="data-table"),
-                id="data-explorer-table",
+                    html.Div(
+                        className="kpi-card",
+                        children=[
+                            html.H4("Log Curves"),
+                            html.H2(len(curves)),
+                        ],
+                    ),
+                    html.Div(
+                        className="kpi-card",
+                        children=[
+                            html.H4("Average GR Coverage"),
+                            html.H2(f"{avg_gr_coverage}%"),
+                        ],
+                    ),
+                    html.Div(
+                        className="kpi-card",
+                        children=[
+                            html.H4("Total Samples"),
+                            html.H2(f"{total_samples:,}"),
+                        ],
+                    ),
+                ],
             ),
 
-        ], className="panel"),
+            # Filters
+            html.Div(
+                className="panel",
+                children=[
+                    html.H3("Filters"),
 
-        # Quality notes
-        html.Div([
+                    html.Label("Select Wells"),
+                    dcc.Dropdown(
+                        id="well-filter",
+                        options=[
+                            {"label": well, "value": well}
+                            for well in wells
+                        ],
+                        value=wells,
+                        multi=True,
+                        placeholder="Select wells",
+                    ),
 
-            html.H3(
-                "Data Quality Notes",
-                className="section-title"
+                    html.Br(),
+
+                    html.Label("Select Curves"),
+                    dcc.Dropdown(
+                        id="curve-filter",
+                        options=[
+                            {"label": curve, "value": curve}
+                            for curve in curves
+                        ],
+                        value=curves,
+                        multi=True,
+                        placeholder="Select curves",
+                    ),
+                ],
             ),
 
-            html.P(
-                f"Coverage is calculated directly from the processed "
-                f"LAS data across {total_samples:,} samples. "
-                "Missing measurements are not treated as zero."
+            # Heatmap
+            html.Div(
+                className="panel",
+                children=[
+                    dcc.Graph(
+                        id="data-explorer-heatmap",
+                        figure=fig,
+                    ),
+                ],
             ),
 
-            *quality_notes,
+            # Coverage Table
+            html.Div(
+                className="panel",
+                children=[
+                    html.H3("Curve Coverage Table"),
+                    html.Div(
+                        id="data-explorer-table",
+                        children=initial_table,
+                    ),
+                ],
+            ),
 
-        ], className="panel"),
-
-    ])
+            # Data quality notes
+            html.Div(
+                className="panel",
+                children=[
+                    html.H3("Data Quality Notes"),
+                    html.Ul(
+                        [
+                            html.Li(
+                                "Curve availability varies significantly "
+                                "between wells."
+                            ),
+                            html.Li(
+                                "Missing curves are treated as unavailable "
+                                "data, not zero-valued measurements."
+                            ),
+                            html.Li(
+                                "W-7 and W-22 have significant curve "
+                                "availability limitations."
+                            ),
+                            html.Li(
+                                "Coverage percentages are calculated from "
+                                "the processed well data."
+                            ),
+                        ]
+                    ),
+                ],
+            ),
+        ]
+    )

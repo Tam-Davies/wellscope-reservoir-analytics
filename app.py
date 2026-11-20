@@ -12,6 +12,8 @@ from src.pages.well_correlation import create_well_correlation_page
 from src.pages.data_explorer import create_data_explorer_page
 from src.callbacks.overview_callbacks import update_data_explorer
 
+from src.pages.project_a import register_project_a_callbacks
+
 app = Dash(
     __name__,
     title="WellScope | Reservoir Analytics",
@@ -75,6 +77,7 @@ def display_page(pathname):
         ]
     )
 
+register_project_a_callbacks(app)
 
 if __name__ == "__main__":
     app.run(debug=True)
